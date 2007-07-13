@@ -448,19 +448,20 @@ then
 		if [ -e "${NEW_ROOT}/mnt/cdrom/livecd.loop" ]; then
 			LOOP='/livecd.loop'
 			LOOPTYPE='normal'
-				elif [ -e "${NEW_ROOT}/mnt/cdrom/zisofs" ]; then
+		elif [ -e "${NEW_ROOT}/mnt/cdrom/zisofs" ]; then
 			LOOP='/zisofs'
 			LOOPTYPE='zisofs'
-				elif [ -e "${NEW_ROOT}/mnt/cdrom/livecd.squashfs" ]; then
+		elif [ -e "${NEW_ROOT}/mnt/cdrom/livecd.squashfs" ]; then
+			good_msg "Using Squashfs to mount NEW-ROOT"
 			LOOP='/livecd.squashfs'
 			LOOPTYPE='squashfs'
-				elif [ -e "${NEW_ROOT}/mnt/cdrom/image.squashfs" ]; then
+		elif [ -e "${NEW_ROOT}/mnt/cdrom/image.squashfs" ]; then
 			LOOP='/image.squashfs'
 			LOOPTYPE='squashfs'
-				elif [ -e "${NEW_ROOT}/mnt/cdrom/livecd.gcloop" ]; then
+		elif [ -e "${NEW_ROOT}/mnt/cdrom/livecd.gcloop" ]; then
 			LOOP='/livecd.gcloop'
 			LOOPTYPE='gcloop'
-				else
+		else
 			LOOPTYPE='noloop'
 		fi
 	fi
