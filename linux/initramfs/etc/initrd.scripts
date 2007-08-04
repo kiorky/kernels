@@ -88,7 +88,6 @@ findcdmount() {
 						REAL_ROOT="${x}"
 						break
 					else
-						bad_msg "WE RE NOT ON A LIVECD"
 						umount ${NEW_ROOT}/mnt/cdrom
 					fi
 				fi
@@ -148,11 +147,13 @@ mount_sysfs() {
 # $2 = path to data directory
 #
 union_insert_dir() {
-   /sbin/unionctl $1 --add --after 0 --mode ro $2
-   if [ $? = '0' ]
-   then
-   	good_msg "Addition of $2 to $1 successful"
-   fi
+	# detect branch 0 because newer unionfs doesn't support "0,1,2"
+	BRANCH_0="/"$(/sbin/unionctl $1 --list | cut -d/ -f2- | cut -d'(' -f1)
+	/sbin/unionctl $1 --add --after $BRANCH_0 --mode ro $2
+	if [ $? = '0' ]
+	then
+		good_msg "Addition of $2 to $1 after branch $BRANCH_0 successful"
+	fi
 }
 
 findnfsmount() {
@@ -282,7 +283,6 @@ test_success() {
 	# If last command failed send error message and fall back to a shell	
 	if [ "$?" != '0' ]
 	then
-		splash 'verbose'
 		bad_msg 'Failed to $1; failing back to the shell...'
 		run_shell
 	fi
@@ -297,6 +297,7 @@ good_msg() {
 bad_msg() {
 	msg_string=$1
 	msg_string="${msg_string:-...}"
+	splash 'verbose' > /dev/null &
 	echo -e "${BAD}!!${NORMAL}${BOLD} ${msg_string} ${NORMAL}"
 } 
 
@@ -322,14 +323,26 @@ start_dev_mgr() {
 
 	if [ "${USE_UDEV_NORMAL}" -eq '1' ]
 	then
-		cd /sys
-		[ "${DO_slowusb}" ] && sleep 10
+		for dir in /sys/bus/usb/drivers/usb-storage/*
+		do
+			if [ -d "${dir}" ]
+			then
+				FORCE_slowusb="1"
+			fi
+		done
+		if [ "${DO_slowusb}" ] || [ "${FORCE_slowusb}" ]
+		then
+			sleep 10
+		fi
+
 		kill_devfsd
 		good_msg 'Activating mdev'
-#		runUdev
 		runmdev
-		[ "${DO_slowusb}" ] && sleep 20
-		cd /
+
+		if [ "${DO_slowusb}" ] || [ "${FORCE_slowusb}" ]
+		then
+			sleep 10
+		fi
 	else
 		good_msg 'Activating devfs'
 		mount -t devfs devfs /dev 2>/dev/null
@@ -695,7 +708,6 @@ cdupdate() {
 			${NEW_ROOT}/mnt/cdrom/cdupdate.sh
 			if [ "$?" != '0' ]
 			then
-				splash 'verbose'
 				bad_msg "Executing cdupdate.sh failed!"
 				run_shell
 			fi
