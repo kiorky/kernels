@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux kernel version: 2.6.22-gentoo-r6
-# Sat Sep 29 18:39:16 2007
+# Sat Sep 29 20:08:32 2007
 #
 CONFIG_X86_32=y
 CONFIG_GENERIC_TIME=y

@@ -83,7 +83,7 @@ findcdmount() {
 				if [ "$?" = '0' ]
 				then
 					# Check for a LiveCD
-					if [ -e ${NEW_ROOT}/mnt/cdrom/${SUBDIR}/livecd ]
+					if [ -f ${NEW_ROOT}/mnt/cdrom/${SUBDIR}/livecd ]
 					then
 						REAL_ROOT="${x}"
 						break
@@ -99,6 +99,46 @@ findcdmount() {
 		fi
 	fi
 }
+
+findkeymount() {
+        if [ "$#" -gt "0" ]
+        then
+                for x in $*
+                do
+                        # Check for a block device to mount
+                        if [ -b "${x}" ]
+                        then
+				if [ ${crypt_silent} = '' ]
+				then
+	                                good_msg "Attempting to mount key media:- ${x}"
+				fi
+
+                                mount -r -t auto ${x} ${NEW_ROOT}/mnt/keydev \
+                                                > /dev/null 2>&1
+                                if [ "$?" = '0' ]
+                                then
+                                        # Check for the key
+                                        if [ -e ${NEW_ROOT}/mnt/keydev/${LUKS_ROOT_KEY} ]
+                                        then
+                                                LUKS_ROOT_KEYDEV="${x}"
+						umount ${NEW_ROOT}/mnt/keydev
+                                                break
+                                        else
+                                                umount ${NEW_ROOT}/mnt/keydev
+                                        fi
+                                fi
+                        fi
+                done
+                if [ "${LUKS_ROOT_KEYDEV}" != '' ]
+                then
+			if [ ${crypt_silent} = '' ]
+			then
+	                        good_msg "Key media found on ${x}"
+			fi
+                fi
+        fi
+}
+
 
 cache_cd_contents() {
 	# Check loop file exists and cache to ramdisk if DO_cache is enabled
@@ -158,7 +198,7 @@ union_insert_dir() {
 
 findnfsmount() {
 
-	if [ "${IP}" != '' ] || busybox udhcpc -R rootpath -n -s /bin/udhcpc.scripts
+	if [ "${IP}" != '' ] || busybox udhcpc  -n -s /bin/udhcpc.scripts
 	then
 		[ -e /rootpath ] && NFSROOT=`cat /rootpath`
 
@@ -323,26 +363,14 @@ start_dev_mgr() {
 
 	if [ "${USE_UDEV_NORMAL}" -eq '1' ]
 	then
-		for dir in /sys/bus/usb/drivers/usb-storage/*
-		do
-			if [ -d "${dir}" ]
-			then
-				FORCE_slowusb="1"
-			fi
-		done
-		if [ "${DO_slowusb}" ] || [ "${FORCE_slowusb}" ]
-		then
-			sleep 10
-		fi
-
+		cd /sys
+		[ "${DO_slowusb}" ] && sleep 10
 		kill_devfsd
 		good_msg 'Activating mdev'
+#		runUdev
 		runmdev
-
-		if [ "${DO_slowusb}" ] || [ "${FORCE_slowusb}" ]
-		then
-			sleep 10
-		fi
+		[ "${DO_slowusb}" ] && sleep 20
+		cd /
 	else
 		good_msg 'Activating devfs'
 		mount -t devfs devfs /dev 2>/dev/null
@@ -368,6 +396,23 @@ bootstrapCD() {
 
 	findcdmount $DEVICES
 }
+
+bootstrapKey() {
+        # Locate the device with our key on it.
+        # USB Keychain/Storage
+        KEYDEVS="/dev/sd*"
+        # CDROM DEVICES
+        KEYDEVS="${KEYDEVS} /dev/cdroms/* /dev/ide/cd/* /dev/sr*"
+        # IDE devices
+        KEYDEVS="${KEYDEVS} /dev/hd*"
+        # USB using the USB Block Driver
+        KEYDEVS="${KEYDEVS} /dev/ubd* /dev/ubd/*"
+        # iSeries devices
+        KEYDEVS="${KEYDEVs} /dev/iseries/vcd*"
+
+        findkeymount ${KEYDEVS}
+}
+
 
 cmdline_hwopts() {
 	# Scan CMDLINE for any "doscsi" or "noscsi"-type arguments
@@ -571,7 +616,7 @@ startVolumes() {
 		fi
 	fi
 
-	if [ "${USE_LVM2_NORMAL}" -eq '1' ]
+	if [ "${USE_LVM_NORMAL}" -eq '1' ]
 	then
 		if [ -e '/bin/vgscan' -a -e '/bin/vgchange' ]
 		then
@@ -585,20 +630,20 @@ startVolumes() {
 			good_msg "Activating Volume Groups"
 			/bin/vgchange -ay --ignorelockingfailure 2>/dev/null
 
-			# Disable EVMS since lvm2 is activated and they dont work together.
-			if [ "${USE_EVMS2_NORMAL}" -eq '1' ]
+			# Disable EVMS since lvm is activated and they dont work together.
+			if [ "${USE_EVMS_NORMAL}" -eq '1' ]
 			then
-				bad_msg "Disabling EVMS Support because LVM2 started"
-				bad_msg "Do not add dolvm2 to the cmdline if this is not what you want"
-				bad_msg "LVM2 and EVMS do not work well together"
-				USE_EVMS2_NORMAL=0
+				bad_msg "Disabling EVMS Support because LVM started"
+				bad_msg "Do not add dolvm to the cmdline if this is not what you want"
+				bad_msg "LVM and EVMS do not work well together"
+				USE_EVMS_NORMAL=0
 			fi
 		else
-			bad_msg "vgscan or vgchange not found: skipping LVM2 volume group activation!"
+			bad_msg "vgscan or vgchange not found: skipping LVM volume group activation!"
 		fi
 	fi
 
-	if [ "${USE_EVMS2_NORMAL}" -eq '1' ]
+	if [ "${USE_EVMS_NORMAL}" -eq '1' ]
 	then
 		if [ -e '/sbin/evms_activate' ]
 		then
@@ -636,6 +681,7 @@ openLUKS() {
 			then
 				break
 			else
+				setup_md_device ${LUKS_DEVICE}
 				if cryptsetup isLuks ${LUKS_DEVICE}
 				then
 					good_msg "Opening LUKS device ${LUKS_DEVICE}"
@@ -801,17 +847,17 @@ setup_unionfs() {
 	fi
 }
 
-suspend_resume() {
-	[ -x /sbin/resume ] || return 0
-	/sbin/resume
-	local ret=$?
+#suspend_resume() {
+#	[ -x /sbin/resume ] || return 0
+#	/sbin/resume
+#	local ret=$?
 
-	if [ "${ret}" -eq 0 ]; then
-		exit 0
-	fi
+#	if [ "${ret}" -eq 0 ]; then
+#		exit 0
+#	fi
 
-	return 0
-}
+#	return 0
+#}
 
 suspend2_resume() {
 	if [ -d /proc/suspend2 ] || [ -d /sys/power/suspend2 ]; then

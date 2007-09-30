@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright 2003-2006 Gentoo Foundation 
+# Copyright 2003-2007 Gentoo Foundation 
 # Distributed under the terms of the GNU General Public License v2
 
 . /etc/initrd.defaults
@@ -72,21 +72,12 @@ do
 			CDROOT=1
 			CDROOT_DEV=`parse_opt "${x}"`
 		;;
-		# Start livecd loop and looptype options
+		# Start livecd loop, looptype options
 		loop\=*)
 			LOOP=`parse_opt "${x}"`
 		;;
 		looptype\=*)
 			LOOPTYPE=`parse_opt "${x}"`
-		;;
-		# Start Device Manager options 
-		devfs)
-			USE_DEVFS_NORMAL=1
-			USE_UDEV_NORMAL=0
-		;;
-		udev)
-			USE_DEVFS_NORMAL=0
-			USE_UDEV_NORMAL=1
 		;;
 		unionfs)
 			if [ ! -x /sbin/unionctl ]
@@ -116,8 +107,8 @@ do
 			fi
 		;;
 		# Start Volume manager options 
-		dolvm2)
-			USE_LVM2_NORMAL=1
+		dolvm)
+			USE_LVM_NORMAL=1
 		;;
 		dodmraid)
 			USE_DMRAID_NORMAL=1
@@ -126,8 +117,8 @@ do
 			DMRAID_OPTS=`parse_opt "${x}"`
 			USE_DMRAID_NORMAL=1
 		;;
-		doevms2)
-			USE_EVMS2_NORMAL=1
+		doevms)
+			USE_EVMS_NORMAL=1
 		;;
 		# Debug Options
 		debug)
@@ -178,6 +169,9 @@ do
 		;;
 		crypt_swap\=*)
 			LUKS_SWAP=`parse_opt "${x}"`
+		;;
+		crypt_silent\=*)
+			LUKS_SILENT=`parse_opt "${x}"`
 		;;
 		real_rootflags\=*)
 			REAL_ROOTFLAGS=`parse_opt "${x}"`
@@ -233,8 +227,11 @@ setup_md_device
 # Scan volumes
 startVolumes
 
-# Initialize LUKS root device
-startLUKS
+# Initialize LUKS root device except for livecd's
+if [ "${CDROOT}" -ne '1' ]
+then
+	startLUKS
+fi
 
 # Set up unionfs
 mkdir -p ${NEW_ROOT}
@@ -250,7 +247,7 @@ fi
 # Run debug shell if requested
 rundebugshell
 
-suspend_resume
+#suspend_resume
 suspend2_resume
 
 if [ "${CDROOT}" -eq '1' ]
@@ -261,7 +258,7 @@ then
 		mount -t tmpfs tmpfs ${NEW_ROOT}
 	fi
 	
-	for i in dev mnt mnt/cdrom mnt/livecd tmp tmp/.initrd mnt/gentoo sys
+	for i in dev mnt mnt/cdrom mnt/livecd mnt/keydev tmp tmp/.initrd mnt/gentoo sys
 	do
 		mkdir -p ${NEW_ROOT}/$i
 		chmod 755 ${NEW_ROOT}/$i
@@ -490,66 +487,108 @@ then
 	fi
 
 	cache_cd_contents
-	# Setup the loopback mounts
+	
 
-	if [ "${LOOPTYPE}" = 'normal' ]
+        # If encrypted, find key and mount, otherwise mount as usual
+	if [ "${LUKS_ROOT}" != '' ] 
 	then
-		good_msg 'Mounting loop filesystem'
-		mount -t ext2 -o loop,ro ${NEW_ROOT}/mnt/cdrom/${LOOPEXT}${LOOP} ${NEW_ROOT}/mnt/livecd
-		test_success 'Mount filesystem'
-		FS_LOCATION='mnt/livecd'
+		if [ "${LUKS_SILENT}" = '' ]
+		then
+			good_msg 'You booted an encrypted livecd'
+		fi
 
+		LUKS_ROOT_KEY=$(head -n 1 ${NEW_ROOT}/mnt/cdrom/livecd)
 
-	elif [ "${LOOPTYPE}" = 'squashfs' ]
-	then
-		good_msg 'Mounting squashfs filesystem'
-		mount -t squashfs -o loop,ro ${NEW_ROOT}/mnt/cdrom/${LOOPEXT}${LOOP} ${NEW_ROOT}/mnt/livecd
+		if [ "${LUKS_ROOT_KEY}" ]
+		then
+			bootstrapKey
+		fi
 		
-		test_success 'Mount filesystem'
-		FS_LOCATION='mnt/livecd'
-	
-	elif [ "${LOOPTYPE}" = 'gcloop' ]
-	then
-		good_msg 'Mounting gcloop filesystem'
-		echo ' ' | losetup -E 19 -e ucl-0 -p0 ${NEW_ROOT}/dev/loop0 ${NEW_ROOT}/mnt/cdrom/${LOOPEXT}${LOOP}
-		test_success 'losetup the loop device'
+		losetup /dev/loop0 ${NEW_ROOT}/mnt/cdrom/${LOOPEXT}${LOOP}
+		
+		test_success 'Preparing loop filesystem'
+		
+		LUKS_ROOT='/dev/loop0'
+		
+		startLUKS
+		
+		case ${LOOPTYPE} in
+			normal)
+				MOUNTTYPE="ext2"
+				;;
+			*)
+				MOUNTTYPE="${LOOPTYPE}"
+				;;
+		esac		
 
-		mount -t ext2 -o ro ${NEW_ROOT}/dev/loop0 ${NEW_ROOT}/mnt/livecd
-		test_success 'Mount the losetup loop device'
-		FS_LOCATION='mnt/livecd'
-	
-	elif [ "${LOOPTYPE}" = 'zisofs' ]
-	then
-		FS_LOCATION="mnt/cdrom/${LOOPEXT}${LOOP}"
-	
-	elif [ "${LOOPTYPE}" = 'noloop' ]
-	then
-		FS_LOCATION='mnt/cdrom'
 
-	elif [ "${LOOPTYPE}" = 'sgimips' ]
-	then
-		# getdvhoff finds the starting offset (in bytes) of the squashfs
-		# partition on the cdrom and returns this offset for losetup
-		#
-		# All currently supported SGI Systems use SCSI CD-ROMs, so
-		# so we know that the CD-ROM is usually going to be /dev/sr0.
-		#
-		# We use the value given to losetup to set /dev/loop0 to point
-		# to the liveCD root partition, and then mount /dev/loop0 as
-		# the LiveCD rootfs
-		good_msg 'Locating the SGI LiveCD Root Partition'
-		echo ' ' | \
-			losetup -o $(/bin/getdvhoff ${NEW_ROOT}${REAL_ROOT} 0) \
-				${NEW_ROOT}${CDROOT_DEV} \
-				${NEW_ROOT}${REAL_ROOT}
-		test_success 'losetup /dev/sr0 /dev/loop0'
-
-		good_msg 'Mounting the Root Partition'
-		mount -t squashfs -o ro ${NEW_ROOT}${CDROOT_DEV} ${NEW_ROOT}/mnt/livecd
-		test_success 'mount /dev/loop0 /'
+		mount -t ${MOUNTTYPE} -o ro /dev/mapper/root ${NEW_ROOT}/mnt/livecd 
+		
+		test_success 'Mount filesystem'	
 		FS_LOCATION='mnt/livecd'
+
+
+
+	# Setup the loopback mounts, if unencrypted
+	else
+		if [ "${LOOPTYPE}" = 'normal' ]
+		then
+			good_msg 'Mounting loop filesystem'
+			mount -t ext2 -o loop,ro ${NEW_ROOT}/mnt/cdrom/${LOOPEXT}${LOOP} ${NEW_ROOT}/mnt/livecd
+			test_success 'Mount filesystem'
+			FS_LOCATION='mnt/livecd'
+	
+	
+		elif [ "${LOOPTYPE}" = 'squashfs' ]
+		then
+			good_msg 'Mounting squashfs filesystem'
+			mount -t squashfs -o loop,ro ${NEW_ROOT}/mnt/cdrom/${LOOPEXT}${LOOP} ${NEW_ROOT}/mnt/livecd
+			
+			test_success 'Mount filesystem'
+			FS_LOCATION='mnt/livecd'
+		
+		elif [ "${LOOPTYPE}" = 'gcloop' ]
+		then
+			good_msg 'Mounting gcloop filesystem'
+			echo ' ' | losetup -E 19 -e ucl-0 -p0 ${NEW_ROOT}/dev/loop0 ${NEW_ROOT}/mnt/cdrom/${LOOPEXT}${LOOP}
+			test_success 'losetup the loop device'
+	
+			mount -t ext2 -o ro ${NEW_ROOT}/dev/loop0 ${NEW_ROOT}/mnt/livecd
+			test_success 'Mount the losetup loop device'
+			FS_LOCATION='mnt/livecd'
+		
+		elif [ "${LOOPTYPE}" = 'zisofs' ]
+		then
+			FS_LOCATION="mnt/cdrom/${LOOPEXT}${LOOP}"
+		
+		elif [ "${LOOPTYPE}" = 'noloop' ]
+		then
+			FS_LOCATION='mnt/cdrom'
+	
+		elif [ "${LOOPTYPE}" = 'sgimips' ]
+		then
+			# getdvhoff finds the starting offset (in bytes) of the squashfs
+			# partition on the cdrom and returns this offset for losetup
+			#
+			# All currently supported SGI Systems use SCSI CD-ROMs, so
+			# so we know that the CD-ROM is usually going to be /dev/sr0.
+			#
+			# We use the value given to losetup to set /dev/loop0 to point
+			# to the liveCD root partition, and then mount /dev/loop0 as
+			# the LiveCD rootfs
+			good_msg 'Locating the SGI LiveCD Root Partition'
+			echo ' ' | \
+				losetup -o $(/bin/getdvhoff ${NEW_ROOT}${REAL_ROOT} 0) \
+					${NEW_ROOT}${CDROOT_DEV} \
+					${NEW_ROOT}${REAL_ROOT}
+			test_success 'losetup /dev/sr0 /dev/loop0'
+	
+			good_msg 'Mounting the Root Partition'
+			mount -t squashfs -o ro ${NEW_ROOT}${CDROOT_DEV} ${NEW_ROOT}/mnt/livecd
+			test_success 'mount /dev/loop0 /'
+			FS_LOCATION='mnt/livecd'
+		fi
 	fi
-
 #
 # End cdrom looptype determination and mounting if necessary
 #
